@@ -1,0 +1,537 @@
+---
+title: "Terrorist Organization Analysis"
+subtitle: "NetworkDivas"
+author: "Alessandro Vimercati & Giovanni Barnaba"
+date: "12-June-2023"
+output: html_document
+---
+
+------------------------------------------------------------------------
+
+**Goal of the Analysis**: The objective of our analysis is to try to understand the structure of terrorist organizations trying to find the 3 main macro structures represented in the image below:\
+
+<center>![Type of Terrorist Network](https://www.rand.org/content/dam/rand/www/external/publications/randreview/issues/rr-winter98-9/fig3.GIF){width="395" height="147"}</center>
+
+-   *Chain*: In a "chain" organization, members are connected linearly, forming a chain. Each member is connected only to the next member in the chain. This type of organization can be represented by a unidirectional chain graph.\
+
+-   *Star or Hubs*: In a "star of hubs" organization, there is a central node (hub) that is directly connected to all other members of the organization. This central node plays a leadership or coordinating role and has a direct connection to all other members. The other members of the organization may have limited connections to each other. This type of organization can be represented by a star graph.\
+
+-   *All-Channels*: In an "all-centered" organization, all members of the organization are directly connected to each other. There is no clear hierarchical or leadership structure, and all members are involved in the connections and communications within the group. This type of organization can be represented by a fully connected graph.\
+
+It is important to note that these organizational models are simplifications, and terrorist networks can exhibit complex and variable forms and structures.\
+
+After understanding the structure of our network we want to analyze how the structure changes trying to remove key figures of the organization.\
+
+# Network Loading
+
+Some useful library for our analysis:
+
+```{r, message=FALSE}
+library(tidyverse)
+library(igraph)
+library(sand)
+```
+
+Let's start to import all the dataset:
+
+```{r,warning=FALSE}
+# Load the data 
+data<-readLines("TerroristRel.edges")
+
+# Split the node in each sub-list contain in "data"
+edges <- strsplit(data, ",")
+
+# Create a dataframe
+edg = data.frame(edges)
+edg = t(edg)
+
+# Let's transform it into a tibble
+edg = as.tibble(edg)
+edg
+```
+
+# Newtwork Description
+
+```{r}
+# Plot our graph:
+set.seed(104)
+full_terr = graph_from_data_frame(edg, directed = FALSE)
+full_terr
+plot(full_terr, vertex.label = NA, edge.label = NA,
+     edge.color = "black", vertex.size = 4, 
+     main = "Terrorist Network", 
+     layout = layout.fruchterman.reingold)
+```
+
+As we can see from the numerical representation of the graph we can observe that we have:\
+- 881 *nodes* that represent each terrorist in our network.\
+- 8592 *edges* that are the connection between terrorists.\
+
+We can also observe that seems to be some group of terrorist that have no edges that link them to the main central network; these autonomous components of the graph could represent newborn star hubs, not interconnected with the main network of terrorists.\
+
+## Check features of the network
+
+Since in the description of the dataset there is no information about the main characteristic of our graph, we want to start to check if it is weighted or not.
+
+```{r,message=FALSE}
+# Let's built the column that compute the weight of each edges:
+w = edg %>% transmute(A = pmin(V1,V2), B = pmax(V1,V2)) %>% distinct() %>% group_by(A,B) %>% summarize(weight = n())
+w
+```
+
+```{r}
+# Check if all the weights are equal to 1:
+are_all_ones = w %>% 
+  pull(weight) %>%
+  all(.==1)
+are_all_ones
+```
+
+As we can see from the tibble above we have all the weights equal to 1, so our graph is *unweighted*.
+
+Check if our graph is connected:
+
+```{r}
+
+is.connected(full_terr)
+```
+
+This result confirms that exist in the network some independent terrorist cells.
+
+## Degree Analysis:
+
+The degree of a vertex in a graph refers to the number of edges connected to that vertex. It represents the number of neighbors or adjacent vertices that are directly connected to a given vertex. In our case the degree of a vertex can provide insights into the connectivity and potential influence of individuals within the terrorist network.\
+
+```{r}
+siu = summary(degree(full_terr))
+siu
+```
+
+From the summary above we can observe the Minimum number of degree, the mean value and also the maximum.\
+
+Let's now plot an histogram of the degree and the degree distribution:\
+
+```{r}
+media = siu[4]
+mediano = siu[3]
+
+fd = degree_distribution(full_terr) # Degree distribution
+names(fd) = 0:max(degree(full_terr))
+d = seq_along(fd)
+
+par(mfrow = c(1,2))
+V(full_terr)$degree <- degree(full_terr)
+uni_all <- seq( min(V(full_terr)$degree), max(V(full_terr)$degree)+1)
+hist(degree(full_terr), breaks =36, col = hcl.colors(length(uni_all), rev = T,palette = "inferno"), main = "Histogram of Degree", xlab = "Degree")
+abline(v = media, lwd=2, col ="red")
+abline(v = mediano, lwd=2, col ="blue")
+plot(log(d), log(fd), col = hcl.colors(length(uni_all), rev = T,palette = "inferno"),pch=19, main = "Log Scale Representation", xlab = "Log(Degree)", ylab = "Log(Frequency")
+```
+
+```{r, echo=FALSE}
+  par(mfrow = c(1,1))
+```
+
+The fact that median is higher than the value of the mean suggest that most of the terrorists have lots of connections meaning that they should be central or influential terrorists in the network. Also graphically we can observe the presence of this relevant terrorists (represented with the color purple), that have high frequency in both graphs.\
+
+Another interesting fact that we can observe from the histogram is that before the maximum numbers of degrees there are some zero frequencies that may identify the terrorists with max degree as leaders of the whole network.\
+
+let's visualize the disposition of the degree in our network:\
+
+```{r}
+set.seed(104)
+V(full_terr)$degree <- degree(full_terr)
+uni_all <- seq( min(V(full_terr)$degree), max(V(full_terr)$degree)+1)
+colors <- data.frame( color = hcl.colors(length(uni_all), rev = T,palette = "inferno"),
+                      levels = uni_all)
+
+# Use match to get the index of right color, matching on levels
+V(full_terr)$color <- colors$color[match(V(full_terr)$degree, colors$levels)]
+
+plot(full_terr,vertex.label=NA,vertex.size = 4, layout=layout.fruchterman.reingold)
+```
+
+Observing the position of the nodes and the relative degrees we can assume the presence of individuals with specific roles that we will try to analyze in details later using other metrics.\
+
+```{r}
+a.nn.deg.terr <- knn(full_terr,V(full_terr))$knn
+plot(degree(full_terr), a.nn.deg.terr,
+col="darkorange", xlab=c("Vertex Degree"), ylab=c("Average Neighbor Degree"), pch= 20)
+abline(lm(a.nn.deg.terr~(degree(full_terr))), col ="slategray")
+```
+
+We can observe a linear increasing trend that means that in general more important terrorists are linked with other important terrorists. 
+
+## Transitivity
+
+Transitivity measures the probability that the neighbors of a node are also connected to each other.\
+
+```{r}
+transitivity(full_terr)
+```
+
+A value of $0.5$ means that, on average, half of the neighbors of a node are connected to each other. In the context of a graph of connections between terrorists, it could indicate the presence of subgroups of terrorists that are closely connected to each other, potentially forming networks of support, collaboration, or coordination within the terrorist organization.
+
+# Graph decomposition
+
+Let's now start to decompose our network into complete subgraph in order to analyze each single cell:
+
+```{r}
+component_list = decompose.graph(full_terr, mode = "weak")
+component_list
+```
+
+```{r}
+plot(component_list[[1]], vertex.label = NA, vertex.size = 3) 
+plot(component_list[[2]], vertex.label = NA, vertex.size = 3)
+plot(component_list[[3]], vertex.label = NA, vertex.size = 3) 
+plot(component_list[[4]], vertex.label = NA, vertex.size = 3) 
+plot(component_list[[10]], vertex.label = NA, vertex.size = 3)
+```
+
+Looking at the plot of all the components we can consider in our analysis just two more relevant ones, avoiding the analysis of the trivial cells.\
+
+Hence, the only thing that we can do with the other small components is to check if they are stars or hubs or not:
+
+```{r}
+star_hub2 = component_list[[2]]
+
+set.seed(104)
+V(star_hub2)$degree <- degree(star_hub2)
+hub_all <- seq( min(V(star_hub2)$degree), max(V(star_hub2)$degree)+1)
+colors <- data.frame( color = hcl.colors(length(hub_all), rev = T,palette = "inferno"),
+                      levels = hub_all)
+# Use match to get the index of right color, matching on levels
+V(star_hub2)$color <- colors$color[match(V(star_hub2)$degree, colors$levels)]
+
+plot(star_hub2,vertex.label=NA,vertex.size = 4, layout=layout.fruchterman.reingold)
+```
+
+We can confirm that the the second component is a perfect representation of a star hub, in which we can see a vertical organization (with a main central node).\
+
+Let's now the tenth component:
+
+```{r}
+star_hub10 = component_list[[10]]
+
+set.seed(104)
+V(star_hub10)$degree <- degree(star_hub10)
+hub10_all <- seq( min(V(star_hub10)$degree), max(V(star_hub10)$degree)+1)
+colors <- data.frame( color = hcl.colors(length(hub10_all), rev = T,palette = "inferno"),
+                      levels = hub10_all)
+# Use match to get the index of right color, matching on levels
+V(star_hub10)$color <- colors$color[match(V(star_hub10)$degree, colors$levels)]
+
+plot(star_hub10,vertex.label=NA,vertex.size = 4, layout=layout.fruchterman.reingold)
+
+```
+
+In this case the component is not representing a star hub, due to the fact that all the nodes have the same degree, so this structure can be reconducted to the all-channel type of organization.
+
+```{r}
+degree(star_hub10)
+is.connected(star_hub10)
+```
+
+------------------------------------------------------------------------
+
+## Falcon
+
+*Falcon* represents the second biggest subgraph of our initial network and it is composed by 110 nodes and 1360 edges.\
+From the plot above falcon has typical structure of an "All Channels".\
+
+```{r}
+falcon = component_list[[3]]
+
+d_falcon = degree(falcon)
+mean_dfalcon = mean(d_falcon)
+median_dfalcon = median(d_falcon)
+V(falcon)$degree <- degree(falcon)
+uni_falcon <- seq( min(V(falcon)$degree), max(V(falcon)$degree)+1)
+hist(d_falcon, breaks =10, col = hcl.colors(length(uni_falcon), rev = T,palette = "orange"), main= "Histogram of Degree: Falcon", xlab = "Degree")
+abline(v = mean_dfalcon, lwd=2, col ="red")
+abline(v = median_dfalcon, lwd=2, col ="blue")
+summary(degree(falcon))
+```
+
+The lower value of degree is 8 and we can also notice from the quantiles that the 75% of falcon's nodes have 25 or more degrees.\
+
+
+
+```{r}
+set.seed(69)
+plot(falcon, vertex.label = NA,vertex.size = 4, layout= layout.fruchterman.reingold)  #
+```
+
+<center>![Why "Falcon"?](https://static.posters.cz/image/750/stampa-su-tela-solo-a-star-wars-story-millennium-falcon-i111631.jpg){width="355" height="258"}</center>
+
+## Grafone
+
+*Grafone* represents the biggest subgraph of our initial network and it is composed by 687 nodes and 6884 edges
+
+```{r}
+
+grafone = component_list[[1]]
+plot(grafone, layout= layout.kamada.kawai, vertex.label = NA, vertex.size = 3)
+d_grafone = degree(grafone)
+
+mean_dgrafone = mean(d_grafone)
+median_dgrafone = median(d_grafone)
+
+hist(d_grafone, breaks =36, col = hcl.colors(length(uni_all), rev = T,palette = "greens"), main = "Histogram of Degree: Grafone", xlab = "Degree")
+abline(v = mean_dgrafone, lwd=2, col ="red")
+abline(v = median_dgrafone, lwd=2, col ="blue")
+```
+
+The histogram above is very similar to the histogram of the whole network, in fact it has a very close allocation of the value of degree.  Thanks to this similarity, we will focus our further analysis on this component, in which we would like the find out the organization of this big terrorist cell.\
+
+In order to analyze the centrality of some important node in this component we would like to focus on the:\
+\
+- **Betweenness centrality**\
+- **Eigen centrality**\
+
+### Betweenness centrality
+
+Betweenness centrality measures the extent to which a node acts as a bridge or intermediary between other nodes in the graph.\
+In the context of a terrorist graph, high betweenness centrality for a node suggests that it serves as a critical link or connector between different individuals or groups within the network. Such nodes can play important roles in the transmission of information, coordination of activities, or control over the flow of resources. They may act as influential figures, brokers, or facilitators in the network.\
+These subjects are commonly called **linkers**.
+
+$$ c_{B}(v) = \sum_{s\neq t\neq v \in V} \frac{\sigma(s,t|v)}{\sigma(s,t)} $$
+
+$\sigma(s,t|v)$ : number of the shortest path between $s$ and $t$ that pass through $v$.\
+$\sigma(s,t)$ :number of the shortest path between $s$ and $t$.\
+
+```{r,warning=FALSE}
+b_grafone = betweenness(grafone,directed = FALSE)
+
+hist(b_grafone,breaks = 100, col = hcl.colors(10, rev = T,palette = "reds"), main = "Histogram of Betweenness: Grafone", xlab = "Betweenness")
+summary(b_grafone)
+```
+
+We can observe that the majority of the nodes has low value of betweenness, but the distribution shows the presence of heavy tail in which we can observe extremely high value of betweenness.\
+
+We can have a look to some of this extreme values, for simplicity we can consider the first 30 nodes according to the highest values of betweenness.\
+
+```{r}
+linkers <- names(sort(b_grafone, decreasing = TRUE)[1:30])
+# Create color vector
+colors <- rep("white", vcount(grafone))  # Initialize all points with the same color
+colors[V(grafone)$name %in% linkers] <- "red"  # Assign different color to top nodes
+
+# Plot the graph with different colors
+set.seed(104)
+plot(grafone, vertex.color = colors, vertex.label = NA,vertex.size = 4, layout= layout.kamada.kawai)  # Modify vertex.label to show node labels if needed
+```
+
+These terrorists seem to have a key role in the coordination between groups, for this reason we can associate them to the figure of linkers. By comparing them to the ones in the previous graph we can see that the nodes with high degree values are not the ones with high betweenness.\
+
+### Linkers' utily
+
+In this section we want to see the importance of linkers and how their removal from the network can change the general structure.\
+
+```{r}
+TEST = delete.vertices(grafone,linkers)
+plot(TEST, vertex.label =NA, vertex.size =4, layout = layout.kamada.kawai)
+```
+
+From the graph above we can see that removing the linkers you get additional sub-components, partly independent and with similar structures to those observed previously.\
+These subjects may be key points for the expansion of the terrorist network.\
+
+### Eigen Centrality
+
+We can now introduce a new metric to asses the importance of nodes: **Eigen centrality** is a measure used in network analysis to quantify the importance or centrality of a node within a network. It is based on the concept of eigen from linear algebra. In simple terms, eigen centrality assigns a score to each node in a network based on its connections to other highly central nodes.\
+
+```{r}
+a= eigen_centrality(grafone)
+hist(a$vector, col ="green4",main = "Eigen Centrality", xlab = "eigen centrality")
+```
+
+Let's now show in the representation of grafone the nodes with the highest values of eigen centrality:
+
+```{r}
+Hegelc <- names(sort(a$vector, decreasing = TRUE)[1:17])
+linkers <- names(sort(b_grafone, decreasing = TRUE)[1:30])
+maxdegree = names(sort(d_grafone, decreasing = TRUE)[1:17])
+# Create color vector
+colors <- rep("white", vcount(grafone))  # Initialize all points with the same color
+colors[V(grafone)$name %in% Hegelc] = "green" # Assign different color to top nodes
+colors[V(grafone)$name %in% linkers] <- "red"
+shapes = rep("circle",vcount(grafone))
+shapes[V(grafone)$name %in% maxdegree] = "square"
+
+# Plot the graph with different colors
+set.seed(104)
+plot(grafone, vertex.color = colors, vertex.shape=shapes, vertex.label = NA,vertex.size = 4, layout= layout.kamada.kawai)  # Modify vertex.label to show node labels if needed
+```
+
+As we can see from graph above the nodes with high eigen centrality values are grouped near to the "All Channels" structures, allowing these structures to join through the linkers to more complex terrorist organizations.\
+These nodes will be called **propagators** in later analysis.
+
+Now we can try detect the propagators of the others "All Channels" structures by removing the linkers.
+
+```{r}
+component_list_TEST = decompose.graph(TEST, mode = "weak")
+sub_grafone = component_list_TEST[[1]]
+simil_falcon = component_list_TEST[[3]]
+plot(sub_grafone, vertex.label =NA, vertex.size =4, layout = layout.kamada.kawai)
+plot(simil_falcon, vertex.label =NA, vertex.size =4, layout = layout.kamada.kawai)
+```
+
+These above are the two biggest component after the removal of linkers.\
+
+Let's see where the new propagators are located in both these new structures:\
+
+```{r}
+a_sub_grafone = eigen_centrality(sub_grafone)
+b_sub_grafone = betweenness(sub_grafone)
+d_sub_grafone = degree(sub_grafone)
+
+Hegelc_sub <- names(sort(a_sub_grafone$vector, decreasing = TRUE)[1:20])
+linkers_sub <- names(sort(b_sub_grafone, decreasing = TRUE)[1:10])
+maxdegree_sub = names(sort(d_sub_grafone, decreasing = TRUE)[1:10])
+# Create color vector
+colors <- rep("white", vcount(sub_grafone))  # Initialize all points with the same color
+colors[V(sub_grafone)$name %in% Hegelc_sub] = "Green" # Assign different color to top nodes
+#colors[V(sub_grafone)$name %in% linkers_sub] <- "red"
+shapes = rep("circle",vcount(sub_grafone))
+shapes[V(sub_grafone)$name %in% maxdegree_sub] = "square"
+
+# Plot the graph with different colors
+set.seed(104)
+plot(sub_grafone, vertex.color = colors, vertex.shape=shapes, vertex.label = NA,vertex.size = 4, layout= layout.kamada.kawai)  # Modify vertex.label to show node labels if needed
+```
+
+As we expect, the new most important propagators are located on the boundaries of the main "All Channels". Please note: the result are not so clear since after removing linkers other nodes are represented closer to the "All Channels" structure.\
+
+Let's now see how the propagators are located in the other sub component.
+
+```{r}
+a_simil_falcon = eigen_centrality(simil_falcon)
+b_simil_falcon = betweenness(simil_falcon)
+d_simil_falcon = degree(simil_falcon)
+
+Hegelc_sfalcon <- names(sort(a_simil_falcon$vector, decreasing = TRUE)[1:20])
+linkers_sfalcon <- names(sort(b_simil_falcon, decreasing = TRUE)[1:10])
+maxdegree_sfalcon = names(sort(d_simil_falcon, decreasing = TRUE)[1:10])
+# Create color vector
+colors <- rep("white", vcount(simil_falcon))  # Initialize all points with the same color
+colors[V(simil_falcon)$name %in% Hegelc_sfalcon] = "Green" # Assign different color to top nodes
+#colors[V(simil_falcon)$name %in% linkers_sfalcon] <- "red"
+shapes = rep("circle",vcount(simil_falcon))
+shapes[V(simil_falcon)$name %in% maxdegree_sfalcon] = "square"
+
+# Plot the graph with different colors
+set.seed(104)
+plot(simil_falcon, vertex.color = colors, vertex.shape=shapes, vertex.label = NA,vertex.size = 4, layout= layout.kamada.kawai)  # Modify vertex.label to show node labels if needed
+```
+
+Also in this plot, even if the removal of linkers have changed a bit the representation, all the propagators are close to the ones found previously.
+
+**COMPARISON**
+We can now visualize the position of the highest value of Eigen Centrality on falcon's plot:
+```{r}
+a= eigen_centrality(falcon)
+
+HegelcFalcon <- names(sort(a$vector, decreasing = TRUE)[1:10])
+maxdegree = names(sort(d_falcon, decreasing = TRUE)[1:10])
+# Create color vector
+colors <- rep("white", vcount(falcon))  # Initialize all points with the same color
+colors[V(falcon)$name %in% HegelcFalcon] = "green"
+shapes = rep("circle",vcount(falcon))
+shapes[V(falcon)$name %in% maxdegree] = "square"
+
+# Plot the graph with different colors
+set.seed(69)
+plot(falcon, main = "Falcon", vertex.color = colors, vertex.shape=shapes, vertex.label = NA,vertex.size = 4, layout= layout.fruchterman.reingold)  # Modify vertex.label to show node labels if needed
+```
+
+We can see that the two plots are very similar, so since we know that "simil falcon" is linked with the main terrorist organization thanks to some linkers, we can assume that in the future falcon may follow the same evolution becoming part of a bigger network.
+
+
+# Stochastic Block Model
+
+The Stochastic Block Model (SBM) is a generative probabilistic model for networks. It assumes that the network is formed by multiple blocks or communities, where nodes within the same block have a higher probability of being connected to each other compared to nodes in different blocks. The SBM provides a framework for modeling and understanding the community structure and connectivity patterns in complex networks.
+
+```{r,results=FALSE}
+#stochastic block model
+am_grafone <- as_adjacency_matrix(grafone, sparse = FALSE)
+gm_grafone <- sbm::estimateSimpleSBM(am_grafone , model="poisson", estimOptions = list(plot = FALSE))
+```
+
+```{r}
+plot(gm_grafone)
+```
+
+The matrix above represents connections between nodes: nodes belonging to the same class tend to have a greater number of connections with nodes belonging to the same class.\
+The number of classes used to represent this matrix is equal to 15, value that maximizes the ICL (Integrated Completed Likelihood).\ 
+Among these 15 classes we can see that 3 of them a quite big dimension and we can assume that these three classes represent the main "All Channel" that we have observed before.\
+Check it graphically:\
+```{r}
+membri_2 = which(gm_grafone$memberships==2)
+vertices_2 <- V(grafone)[membri_2]
+membri_5 = which(gm_grafone$memberships==5)
+vertices_5 <- V(grafone)[membri_5]
+membri_6 = which(gm_grafone$memberships==6)
+vertices_6 <- V(grafone)[membri_6]
+
+colors <- rep("white", vcount(grafone))  # Initialize all points with the same color
+colors[V(grafone)[membri_2]] = "green" # Assign different color to top nodes
+
+colors[V(grafone)[membri_5]] = "red" # Assign different color to top nodes
+
+colors[V(grafone)[membri_6]] = "blue" # Assign different color to top nodes
+
+# Plot the graph with different colors
+set.seed(104)
+plot(grafone, vertex.color = colors, vertex.label = NA,vertex.size = 4, layout= layout.kamada.kawai)
+```
+
+# Clustering
+
+## Fast_greedy
+
+The algorithm works by iteratively merging or splitting communities to optimize a modularity score. Modularity measures the quality of the division of a graph into communities, with higher modularity indicating a better division.
+
+```{r}
+clstr = cluster_fast_greedy(grafone)
+sizes(clstr)
+```
+
+We can observe three high values of the size, suggesting the presence of three main "All Channels" structures.\
+
+```{r}
+hist(clstr$modularity,main="Modularity Histogram",col = "olivedrab",breaks=8, xlab="Modularity")
+summary(clstr$modularity)
+abline(v=mean(clstr$modularity),col="lightcoral", lwd =3)
+abline(v=median(clstr$modularity),col="mediumturquoise", lwd=3)
+```
+
+The mean value $0.32$ represents the average modularity across all communities in the graph. It suggests an overall tendency for the nodes within communities to be more densely connected compared to the connections between communities.
+
+```{r}
+plot(clstr,grafone,vertex.label = NA,vertex.size = 3,layout = layout.kamada.kawai)
+```
+
+From the plot above we can see clearly the three main "All Channels" but we are not able to clearly distinguish the other two common structures.\
+
+## Cluster Edge Betweenness
+
+We can also compute the clusterization based on edge betweenness centrality due to the fact that in previous analysis we have find out the importance of the linkers in the terrorists' organization.\
+Edge betweenness centrality measures the number of times a particular edge is included in the shortest path between all pairs of nodes in the network.\
+
+```{r}
+#Cluster edge betweenness
+fastlife = cluster_edge_betweenness(grafone)
+sizes(fastlife)
+```
+
+```{r}
+plot(fastlife,grafone,vertex.label = NA,vertex.size = 3,layout = layout.kamada.kawai)
+```
+
+With this different type of clusterization we have obtained 16 different communities; This result shows in a better way the three different typologies of terroristic organizations without loosing information about the "All Channels" that we found in the previous analysis.
+
+# Conclusion
+Thanks to this analysis we are able to understand the process of formation of large terrorist networks.\
+The first terrorist cells that are formed are composed of 3 individuals, over time these cells tend to expand but acquiring a hierarchy of command in the "Hub" phase. Continuing their expansion then reach the stage of "All Channels" in which they return to have an equal power within the terrorist cell and creating a large number of connections between members who belong to it.\
+Once established as "All Channels" through connections with linkers these structures can become part of large Terrorist Networks.
