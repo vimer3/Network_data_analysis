@@ -16,7 +16,7 @@ We employ betweenness centrality and eigenvector centrality to identify key figu
 4️⃣ **Community Detection:** 🔬
 We apply Stochastic Block Models and clustering algorithms to detect communities within the network.
 
-5️⃣** Structural Analysis:** 🏗️
+5️⃣ **Structural Analysis:**  🏗️
 We identify and analyze three main organizational structures: Chain, Star or Hub, and All-Channel networks.
 
 
